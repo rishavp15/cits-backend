@@ -26,6 +26,3 @@ urlpatterns = [
     path("admin/certificates/<str:certificate_id>/send/", views.admin_send_certificate, name="admin-certificates-send"),
 ]
 
-
-]
-
