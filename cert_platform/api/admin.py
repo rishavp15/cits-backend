@@ -74,19 +74,3 @@ class EmailOTPAdmin(admin.ModelAdmin):
     list_display = ("email", "code", "created_at", "verified_at")
     search_fields = ("email",)
     list_filter = ("created_at",)
-
-    search_fields = ("certificate__certificate_id",)
-
-
-@admin.register(ContactMessage)
-class ContactMessageAdmin(admin.ModelAdmin):
-    list_display = ("name", "email", "subject", "created_at")
-    search_fields = ("name", "email", "subject", "message")
-    list_filter = ("created_at",)
-
-
-@admin.register(EmailOTP)
-class EmailOTPAdmin(admin.ModelAdmin):
-    list_display = ("email", "code", "created_at", "verified_at")
-    search_fields = ("email",)
-    list_filter = ("created_at",)
