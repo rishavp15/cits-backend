@@ -1312,8 +1312,6 @@ def admin_send_certificate(request, certificate_id):
         )
         return _json_error(str(exc), status=502)
 
-    )
-
 
 @csrf_exempt
 @require_POST
