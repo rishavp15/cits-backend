@@ -211,6 +211,11 @@ def _serialize_course(course: Course):
         "slug": str(course.slug) if course.slug else "",
         "title": str(course.title) if course.title else "",
         "description": str(course.description) if course.description else "",
+        # SEO metadata (optional; frontend can fall back to title/description)
+        "seoTitle": str(course.seo_title) if getattr(course, "seo_title", None) else "",
+        "seoDescription": str(course.seo_description) if getattr(course, "seo_description", None) else "",
+        "seoKeywords": str(course.seo_keywords) if getattr(course, "seo_keywords", None) else "",
+        "ogImageUrl": str(course.og_image_url) if getattr(course, "og_image_url", None) else "",
         "heroTagline": str(course.hero_tagline) if course.hero_tagline else "",
         "heroTitle": str(course.hero_title) if course.hero_title else "",
         "heroDescription": str(course.hero_description) if course.hero_description else "",
