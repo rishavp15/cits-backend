@@ -13,11 +13,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY requirements.txt /app/requirements.txt
-# Install PhonePe SDK first with custom index URL
+# Install PhonePe SDK first with custom index URL (add trusted hosts + verbose for debugging)
 RUN pip install --upgrade pip && \
-    pip install --index-url https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-python --extra-index-url https://pypi.org/simple phonepe_sdk && \
+    pip install \
+      --index-url https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-python \
+      --extra-index-url https://pypi.org/simple \
+      --trusted-host phonepe.mycloudrepo.io \
+      --trusted-host pypi.org \
+      --trusted-host files.pythonhosted.org \
+      --verbose \
+      phonepe_sdk && \
     pip install -r /app/requirements.txt && \
-    python -c "import phonepe_sdk; print('PhonePe SDK installed successfully')" || echo "Warning: PhonePe SDK import failed"
+    python - <<'PY'
+import phonepe_sdk
+print("PhonePe SDK installed successfully:", phonepe_sdk.__version__)
+PY
 
 # Copy backend project
 COPY cert_platform /app/cert_platform
