@@ -12,22 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
+COPY vendor/ /app/vendor/
 COPY requirements.txt /app/requirements.txt
-# Install PhonePe SDK first with custom index URL (non-fatal; emit diagnostics)
+# Install vendored PhonePe SDK wheel (deterministic, no external index required)
 RUN set -eux; \
     pip install --upgrade pip; \
-    if pip install \
-      --index-url https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-python \
-      --extra-index-url https://pypi.org/simple \
-      --trusted-host phonepe.mycloudrepo.io \
-      --trusted-host pypi.org \
-      --trusted-host files.pythonhosted.org \
-      --verbose \
-      phonepe_sdk; then \
-        echo "PhonePe SDK install attempted"; \
-    else \
-        echo "Warning: PhonePe SDK install failed; continuing without SDK."; \
-    fi; \
+    pip install /app/vendor/phonepe_sdk-2.1.5-py3-none-any.whl; \
     pip install -r /app/requirements.txt; \
     python - <<'PY' || true
 import pkgutil
