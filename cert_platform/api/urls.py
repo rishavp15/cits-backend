@@ -12,6 +12,7 @@ urlpatterns = [
     path("assessment/submit/", views.submit_assessment, name="assessment-submit"),
     path("plans/", views.list_plans, name="plans"),
     path("payment/checkout/", views.checkout_plan, name="checkout"),
+    path("payment-callback/", views.phonepe_payment_callback, name="phonepe-callback"),
     path("certificate/basic/render/", views.render_basic_certificate, name="basic-certificate-render"),
     path("certificate/issue/", views.issue_certificate, name="issue-certificate"),
     path("fulfillment/progress/", views.fulfillment_handler, name="fulfillment"),

@@ -13,7 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip && pip install -r /app/requirements.txt
+# Install PhonePe SDK first with custom index URL
+RUN pip install --upgrade pip && \
+    pip install --index-url https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-python --extra-index-url https://pypi.org/simple phonepe_sdk && \
+    pip install -r /app/requirements.txt
 
 # Copy backend project
 COPY cert_platform /app/cert_platform

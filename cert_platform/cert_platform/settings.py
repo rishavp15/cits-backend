@@ -66,8 +66,11 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
 GMAIL_SENDER = os.environ.get("GMAIL_SENDER")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", GMAIL_SENDER)
 
-RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
+# PhonePe Payment Gateway Configuration
+PHONEPE_MERCHANT_ID = os.environ.get("PHONEPE_MERCHANT_ID")
+PHONEPE_CLIENT_ID = os.environ.get("PHONEPE_CLIENT_ID")
+PHONEPE_CLIENT_SECRET = os.environ.get("PHONEPE_CLIENT_SECRET")
+PHONEPE_ENVIRONMENT = os.environ.get("PHONEPE_ENVIRONMENT", "SANDBOX")  # SANDBOX or PRODUCTION
 
 
 # Application definition

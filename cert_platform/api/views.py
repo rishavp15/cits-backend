@@ -30,7 +30,8 @@ from .models import (
 from .services.gmail import GmailSendError, send_certificate_email
 from .certificates import CertificateData, CertificateGenerator
 
-import razorpay  # type: ignore
+import requests
+from phonepe_sdk.standard_checkout import StandardCheckoutClient
 
 
 logger = logging.getLogger(__name__)
@@ -613,44 +614,62 @@ def checkout_plan(request):
         },
     )
     # ------------------------------------------------------------------
-    # Razorpay integration: create an order for this payment
+    # PhonePe integration: create a payment request
     # ------------------------------------------------------------------
-    key_id = getattr(settings, "RAZORPAY_KEY_ID", None)
-    key_secret = getattr(settings, "RAZORPAY_KEY_SECRET", None)
+    merchant_id = getattr(settings, "PHONEPE_MERCHANT_ID", None)
+    client_id = getattr(settings, "PHONEPE_CLIENT_ID", None)
+    client_secret = getattr(settings, "PHONEPE_CLIENT_SECRET", None)
+    phonepe_env = getattr(settings, "PHONEPE_ENVIRONMENT", "SANDBOX")  # SANDBOX or PRODUCTION
+    frontend_base_url = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+    amount_paise = int(policy["price"]) * 100
 
-    razorpay_order = None
-    if key_id and key_secret:
-        client = razorpay.Client(auth=(key_id, key_secret))
-        amount_paise = int(policy["price"]) * 100
+    phonepe_payment = None
+    if client_id and client_secret:
         try:
-            razorpay_order = client.order.create(
-                {
-                    "amount": amount_paise,
-                    "currency": policy.get("currency", "INR"),
-                    "receipt": transaction_id,
-                    "payment_capture": 1,
-                    "notes": {
-                        "plan_type": plan_key,
-                        "email": payment.email,
-                        "course_slug": payload.get("courseSlug") or "",
-                    },
+            # Initialize PhonePe client (merchant_id is optional, may be part of client_id)
+            client_kwargs = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "environment": phonepe_env
+            }
+            if merchant_id:
+                client_kwargs["merchant_id"] = merchant_id
+            
+            client = StandardCheckoutClient(**client_kwargs)
+            
+            redirect_url = f"{frontend_base_url}/payment-success"
+            callback_url = f"{request.scheme}://{request.get_host()}/api/payment-callback/"
+            
+            # Create payment request using PhonePe SDK
+            phonepe_payment = client.create_payment_request(
+                merchant_transaction_id=transaction_id,
+                amount=amount_paise,
+                merchant_user_id=email,  # Use email as unique user identifier
+                redirect_url=redirect_url,
+                redirect_mode="POST",
+                callback_url=callback_url,
+                mobile_number=payload.get("phone", ""),
+                payment_instrument={
+                    "type": "PAY_PAGE"
                 }
             )
-            # Persist Razorpay order id for later verification if needed
+            
+            # Persist PhonePe payment details for later verification
             meta = dict(payment.metadata or {})
-            meta["razorpay"] = {
-                "order_id": razorpay_order.get("id"),
-                "amount": razorpay_order.get("amount"),
-                "currency": razorpay_order.get("currency"),
-                "status": razorpay_order.get("status"),
+            meta["phonepe"] = {
+                "merchant_transaction_id": transaction_id,
+                "amount": amount_paise,
+                "currency": policy.get("currency", "INR"),
+                "redirect_url": redirect_url,
+                "callback_url": callback_url,
             }
             payment.metadata = meta
             payment.save(update_fields=["metadata", "updated_at"])
         except Exception as exc:
-            logger.exception("Failed to create Razorpay order for %s", transaction_id)
+            logger.exception("Failed to create PhonePe payment for %s", transaction_id)
             return _json_error("Unable to initiate payment. Please try again in a moment.")
     else:
-        logger.warning("Razorpay keys not configured; skipping live payment flow.")
+        logger.warning("PhonePe credentials not configured; skipping live payment flow.")
 
     response_payload = {
         "transactionId": transaction_id,
@@ -666,15 +685,70 @@ def checkout_plan(request):
         "endDate": end_date.isoformat() if end_date else None,
     }
 
-    if razorpay_order:
-        response_payload["razorpay"] = {
-            "keyId": key_id,
-            "orderId": razorpay_order.get("id"),
-            "amount": razorpay_order.get("amount"),
-            "currency": razorpay_order.get("currency"),
+    if phonepe_payment:
+        # Extract redirect URL from PhonePe response
+        redirect_url_phonepe = None
+        if isinstance(phonepe_payment, dict):
+            redirect_url_phonepe = phonepe_payment.get("data", {}).get("instrumentResponse", {}).get("redirectInfo", {}).get("url")
+        
+        response_payload["phonepe"] = {
+            "merchantId": merchant_id,
+            "merchantTransactionId": transaction_id,
+            "amount": amount_paise,
+            "currency": policy.get("currency", "INR"),
+            "redirectUrl": redirect_url_phonepe,
         }
 
     return JsonResponse(response_payload)
+
+
+@csrf_exempt
+@require_POST
+def phonepe_payment_callback(request):
+    """Handle PhonePe payment callback/webhook after payment completion."""
+    try:
+        payload = _parse_body(request)
+    except ValueError as error:
+        logger.warning("Invalid callback payload: %s", error)
+        return JsonResponse({"success": False, "message": "Invalid payload"}, status=400)
+
+    # PhonePe callback structure: typically contains merchantTransactionId and status
+    merchant_transaction_id = payload.get("merchantTransactionId") or payload.get("transactionId")
+    if not merchant_transaction_id:
+        logger.warning("Missing merchantTransactionId in callback")
+        return JsonResponse({"success": False, "message": "Missing transaction ID"}, status=400)
+
+    try:
+        payment = Payment.objects.get(transaction_id=merchant_transaction_id)
+    except Payment.DoesNotExist:
+        logger.warning("Payment not found for transaction: %s", merchant_transaction_id)
+        return JsonResponse({"success": False, "message": "Payment not found"}, status=404)
+
+    # Update payment status based on PhonePe response
+    payment_status = payload.get("code") or payload.get("status", "").upper()
+    
+    # PhonePe typically returns "PAYMENT_SUCCESS" or "PAYMENT_ERROR"
+    if payment_status == "PAYMENT_SUCCESS" or payload.get("success") is True:
+        if payment.status != "paid":
+            payment.status = "paid"
+            payment.save(update_fields=["status", "updated_at"])
+            logger.info("Payment marked as paid for transaction: %s", merchant_transaction_id)
+    elif payment_status == "PAYMENT_ERROR" or payment_status == "FAILED":
+        if payment.status != "failed":
+            payment.status = "failed"
+            payment.save(update_fields=["status", "updated_at"])
+            logger.info("Payment marked as failed for transaction: %s", merchant_transaction_id)
+
+    # Store PhonePe callback response in metadata
+    meta = dict(payment.metadata or {})
+    meta["phonepe_callback"] = {
+        "payload": payload,
+        "received_at": timezone.now().isoformat(),
+    }
+    payment.metadata = meta
+    payment.save(update_fields=["metadata", "updated_at"])
+
+    return JsonResponse({"success": True, "message": "Callback processed"})
 
 
 def _set_meta_field(meta: dict, key: str, value):
