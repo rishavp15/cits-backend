@@ -16,7 +16,8 @@ COPY requirements.txt /app/requirements.txt
 # Install PhonePe SDK first with custom index URL
 RUN pip install --upgrade pip && \
     pip install --index-url https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-python --extra-index-url https://pypi.org/simple phonepe_sdk && \
-    pip install -r /app/requirements.txt
+    pip install -r /app/requirements.txt && \
+    python -c "import phonepe_sdk; print('PhonePe SDK installed successfully')" || echo "Warning: PhonePe SDK import failed"
 
 # Copy backend project
 COPY cert_platform /app/cert_platform

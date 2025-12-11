@@ -31,7 +31,14 @@ from .services.gmail import GmailSendError, send_certificate_email
 from .certificates import CertificateData, CertificateGenerator
 
 import requests
-from phonepe_sdk.standard_checkout import StandardCheckoutClient
+
+# Lazy import for PhonePe SDK (only import when needed)
+try:
+    from phonepe_sdk.standard_checkout import StandardCheckoutClient
+    PHONEPE_SDK_AVAILABLE = True
+except ImportError:
+    PHONEPE_SDK_AVAILABLE = False
+    StandardCheckoutClient = None
 
 
 logger = logging.getLogger(__name__)
@@ -625,6 +632,10 @@ def checkout_plan(request):
 
     phonepe_payment = None
     if client_id and client_secret:
+        if not PHONEPE_SDK_AVAILABLE:
+            logger.error("PhonePe SDK not installed. Please install it using: pip install --index-url https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-python --extra-index-url https://pypi.org/simple phonepe_sdk")
+            return _json_error("Payment gateway not configured. Please contact support.")
+        
         try:
             # Initialize PhonePe client (merchant_id is optional, may be part of client_id)
             client_kwargs = {
