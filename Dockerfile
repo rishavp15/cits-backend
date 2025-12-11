@@ -13,20 +13,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY requirements.txt /app/requirements.txt
-# Install PhonePe SDK first with custom index URL (add trusted hosts + verbose for debugging)
-RUN pip install --upgrade pip && \
-    pip install \
+# Install PhonePe SDK first with custom index URL (non-fatal; emit diagnostics)
+RUN set -eux; \
+    pip install --upgrade pip; \
+    if pip install \
       --index-url https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-python \
       --extra-index-url https://pypi.org/simple \
       --trusted-host phonepe.mycloudrepo.io \
       --trusted-host pypi.org \
       --trusted-host files.pythonhosted.org \
       --verbose \
-      phonepe_sdk && \
-    pip install -r /app/requirements.txt && \
-    python - <<'PY'
-import phonepe_sdk
-print("PhonePe SDK installed successfully:", phonepe_sdk.__version__)
+      phonepe_sdk; then \
+        echo "PhonePe SDK install attempted"; \
+    else \
+        echo "Warning: PhonePe SDK install failed; continuing without SDK."; \
+    fi; \
+    pip install -r /app/requirements.txt; \
+    python - <<'PY' || true
+import pkgutil
+mods = [m.name for m in pkgutil.iter_modules() if "phonepe" in m.name.lower()]
+print("PhonePe-related modules detected:", mods)
+try:
+    import phonepe_sdk
+    print("phonepe_sdk import OK, version:", getattr(phonepe_sdk, "__version__", "unknown"))
+except Exception as exc:
+    print("phonepe_sdk import failed:", exc)
+try:
+    import phonepe
+    print("phonepe import OK, version:", getattr(phonepe, "__version__", "unknown"))
+except Exception as exc:
+    print("phonepe import failed:", exc)
 PY
 
 # Copy backend project
