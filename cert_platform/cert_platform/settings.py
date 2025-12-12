@@ -55,7 +55,23 @@ ALLOWED_HOSTS = (
     else []
 )
 
-ADMIN_PANEL_PASSWORD = os.environ.get("ADMIN_PANEL_PASSWORD", "admin-pass")
+# CSRF Trusted Origins for admin panel
+# Add your production domain here or via CSRF_TRUSTED_ORIGINS env variable
+default_origins = "https://citsdigital.tech,https://www.citsdigital.tech,https://uncomfortable-karin-cits-free-9b96c27e.koyeb.app,http://127.0.0.1:8000,http://localhost:8000"
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("CSRF_TRUSTED_ORIGINS", default_origins).split(",")
+    if origin.strip()
+]
+
+# Session and CSRF cookie settings
+# In production (HTTPS), these should be True. In development (HTTP), False.
+SESSION_COOKIE_SECURE = not DEBUG  # True in production, False in development
+CSRF_COOKIE_SECURE = not DEBUG  # True in production, False in development
+SESSION_COOKIE_SAMESITE = 'Lax'  # Allows cookies to be sent with same-site requests
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+ADMIN_PANEL_PASSWORD = os.environ.get("ADMIN_PANEL_PASSWORD", "Prakash10")
 ADMIN_TOKEN_TTL_SECONDS = int(os.environ.get("ADMIN_TOKEN_TTL_SECONDS", 60 * 60 * 12))
 
 # SMTP Configuration for Gmail
@@ -175,7 +191,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Default primary key field type

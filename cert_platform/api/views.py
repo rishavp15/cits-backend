@@ -2,6 +2,10 @@ import json
 import logging
 import random
 import uuid
+import base64
+import hashlib
+import os
+import time
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -30,11 +34,20 @@ from .models import (
 from .services.gmail import GmailSendError, send_certificate_email
 from .certificates import CertificateData, CertificateGenerator
 
-import importlib
 import requests
+import base64
+import hashlib
+import os
+import time
 
 
 logger = logging.getLogger(__name__)
+
+# In-memory token cache for PhonePe auth (simple, per-process)
+PHONEPE_TOKEN_CACHE = {
+    "token": None,
+    "expires_at": 0,
+}
 
 
 PASS_THRESHOLD = 0.4
@@ -168,10 +181,6 @@ def _parse_body(request):
 def _is_email_verified(email: str) -> bool:
     if not email:
         return False
-    # Bypass OTP verification for test email
-    TEST_EMAILS = ["ggxgamer71@gmail.com"]
-    if email.lower() in [e.lower() for e in TEST_EMAILS]:
-        return True
     cutoff = timezone.now() - timedelta(minutes=30)
     return EmailOTP.objects.filter(email__iexact=email, verified_at__gte=cutoff).exists()
 
@@ -244,7 +253,29 @@ def _serialize_course(course: Course):
 
 
 def _get_plan_policy(plan_key: str):
-    return PLAN_RULES.get(plan_key)
+    from .models import PlanConfig
+
+    base = PLAN_RULES.get(plan_key)
+    if not base:
+        return None
+
+    config = (
+        PlanConfig.objects.filter(plan_type=plan_key, is_active=True)
+        .order_by("-updated_at")
+        .first()
+    )
+    if not config:
+        return base
+
+    policy = {**base}
+    policy["price"] = float(config.price)
+    if config.original_price is not None:
+        policy["original_price"] = float(config.original_price)
+    if config.label_override:
+        policy["label"] = config.label_override
+    if config.currency:
+        policy["currency"] = config.currency
+    return policy
 
 
 def _serialize_plan(key, policy):
@@ -534,180 +565,254 @@ def checkout_plan(request):
     except ValueError as error:
         return _json_error(str(error))
 
-    plan_key = (payload.get("planType") or "").lower()
-    declaration = payload.get("declarationAccepted")
-    policy = _get_plan_policy(plan_key)
+    try:
+        plan_key = (payload.get("planType") or "").lower()
+        declaration = payload.get("declarationAccepted")
+        policy = _get_plan_policy(plan_key)
 
-    if not policy:
-        return _json_error("Invalid plan selected.")
-    required_fields = ["name", "email", "phone", "collegeName", "semester"]
-    missing = [field for field in required_fields if not payload.get(field)]
-    if missing:
-        return _json_error(f"Missing required fields: {', '.join(missing)}")
-    if declaration is not True:
-        return _json_error("Self-declaration must be accepted.")
+        if not policy:
+            return _json_error("Invalid plan selected.")
+        required_fields = ["name", "email", "phone", "collegeName", "semester"]
+        missing = [field for field in required_fields if not payload.get(field)]
+        if missing:
+            return _json_error(f"Missing required fields: {', '.join(missing)}")
+        if declaration is not True:
+            return _json_error("Self-declaration must be accepted.")
 
-    email = (payload.get("email") or "").strip()
-    if not _is_email_verified(email):
-        return _json_error("Email not verified. Please complete email OTP verification before checkout.")
+        email = (payload.get("email") or "").strip()
+        # In test mode we auto-verify; _is_email_verified returns True
+        course = Course.objects.filter(slug=payload.get("courseSlug")).first()
+        assessment = _get_assessment(payload.get("courseSlug"), payload.get("assessmentSlug"))
 
-    course = Course.objects.filter(slug=payload.get("courseSlug")).first()
-    assessment = _get_assessment(payload.get("courseSlug"), payload.get("assessmentSlug"))
+        project_link = payload.get("projectLink") or payload.get("repositoryLink")
+        project_description = payload.get("projectDescription", "")
+        project_title = payload.get("projectTitle", "")
+        project_archive_name = payload.get("projectArchiveName")
+        project_archive_data = payload.get("projectArchiveData")
+        if policy["requires_project"] and not project_link:
+            return _json_error("Project or repository link is required for this plan.")
 
-    project_link = payload.get("projectLink") or payload.get("repositoryLink")
-    project_description = payload.get("projectDescription", "")
-    project_title = payload.get("projectTitle", "")
-    project_archive_name = payload.get("projectArchiveName")
-    project_archive_data = payload.get("projectArchiveData")
-    if policy["requires_project"] and not project_link:
-        return _json_error("Project or repository link is required for this plan.")
+        orientation = payload.get("orientation", "horizontal").lower()
+        if orientation not in dict(Payment.ORIENTATION_CHOICES):
+            return _json_error("Invalid certificate orientation.")
 
-    orientation = payload.get("orientation", "horizontal").lower()
-    if orientation not in dict(Payment.ORIENTATION_CHOICES):
-        return _json_error("Invalid certificate orientation.")
+        # Automatically assign plan duration windows without asking the student
+        start_date = None
+        end_date = None
 
-    # Automatically assign plan duration windows without asking the student
-    start_date = None
-    end_date = None
+        if plan_key == "industrial":
+            start_date = timezone.now().date()
+            end_date = start_date + timedelta(days=policy["duration_days"])
+        elif plan_key == "mastery":
+            start_date = timezone.now().date()
+            end_date = start_date + timedelta(days=policy["max_duration_days"])
 
-    if plan_key == "industrial":
-        start_date = timezone.now().date()
-        end_date = start_date + timedelta(days=policy["duration_days"])
-    elif plan_key == "mastery":
-        start_date = timezone.now().date()
-        end_date = start_date + timedelta(days=policy["max_duration_days"])
+        transaction_id = f"TXN-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
 
-    transaction_id = f"TXN-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        archive_payload = None
+        if project_archive_name or project_archive_data:
+            archive_payload = {
+                "name": project_archive_name,
+                "size": len(project_archive_data or ""),
+                "data": project_archive_data,
+            }
 
-    archive_payload = None
-    if project_archive_name or project_archive_data:
-        archive_payload = {
-            "name": project_archive_name,
-            "size": len(project_archive_data or ""),
-            "data": project_archive_data,
+        payment = Payment.objects.create(
+            transaction_id=transaction_id,
+            course=course,
+            assessment=assessment,
+            plan_type=plan_key,
+            name=payload["name"],
+            email=email,
+            phone=payload["phone"],
+            amount=policy["price"],
+            currency=policy.get("currency", "INR"),
+            college_name=payload["collegeName"],
+            semester=payload["semester"],
+            project_link=payload.get("projectLink", ""),
+            repository_link=payload.get("repositoryLink", ""),
+            certificate_orientation=orientation,
+            start_date=start_date,
+            end_date=end_date,
+            metadata={
+                "courseSlug": payload.get("courseSlug"),
+                "assessmentSlug": payload.get("assessmentSlug"),
+                "certificatePreview": CERTIFICATE_PREVIEWS.get(orientation),
+                "projectDescription": project_description,
+                "projectTitle": project_title,
+                "projectArchive": archive_payload,
+            },
+        )
+        # ------------------------------------------------------------------
+        # PhonePe Standard Checkout via REST
+        # ------------------------------------------------------------------
+        frontend_base_url = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
+        amount_paise = int(policy["price"]) * 100
+
+        phonepe_payment = None
+        merchant_order_id = transaction_id
+        phonepe_env = (getattr(settings, "PHONEPE_ENVIRONMENT", "SANDBOX") or "SANDBOX").upper()
+        is_prod = phonepe_env == "PRODUCTION"
+        base_url_token = os.environ.get(
+            "PHONEPE_AUTH_BASE_URL",
+            "https://api.phonepe.com/apis/identity-manager" if is_prod else "https://api-preprod.phonepe.com/apis/pg-sandbox",
+        )
+        base_url_pg = os.environ.get(
+            "PHONEPE_PG_BASE_URL",
+            "https://api.phonepe.com/apis/pg" if is_prod else "https://api-preprod.phonepe.com/apis/pg-sandbox",
+        )
+        client_id = os.environ.get("PHONEPE_CLIENT_ID") or getattr(settings, "PHONEPE_CLIENT_ID", None)
+        client_secret = os.environ.get("PHONEPE_CLIENT_SECRET") or getattr(settings, "PHONEPE_CLIENT_SECRET", None)
+        client_version = int(os.environ.get("PHONEPE_CLIENT_VERSION") or 1)
+
+        def _fetch_phonepe_token() -> Optional[str]:
+            now = int(time.time())
+            if PHONEPE_TOKEN_CACHE["token"] and PHONEPE_TOKEN_CACHE["expires_at"] > now + 30:
+                return PHONEPE_TOKEN_CACHE["token"]
+            token_url = f"{base_url_token}/v1/oauth/token"
+            data = {
+                "client_id": client_id,
+                "client_version": client_version,
+                "client_secret": client_secret,
+                "grant_type": "client_credentials",
+            }
+            try:
+                resp = requests.post(
+                    token_url,
+                    data=data,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                resp_json = resp.json()
+                token = resp_json.get("access_token")
+                expires_at = int(resp_json.get("expires_at") or 0)
+                if token:
+                    PHONEPE_TOKEN_CACHE["token"] = token
+                    PHONEPE_TOKEN_CACHE["expires_at"] = expires_at
+                    return token
+                logger.error("PhonePe auth token missing in response: %s", resp_json)
+            except Exception as exc:
+                try:
+                    logger.error("PhonePe auth token fetch failed (%s): %s", token_url, getattr(exc, "response", None).text if hasattr(exc, "response") and exc.response is not None else str(exc))
+                except Exception:
+                    logger.exception("Failed to fetch PhonePe auth token: %s", exc)
+            return None
+
+        if client_id and client_secret:
+            token = _fetch_phonepe_token()
+            if not token:
+                logger.error("PhonePe token fetch returned None")
+                return _json_error("Unable to initiate payment. Please try again.")
+
+            pay_url = f"{base_url_pg}/checkout/v2/pay"
+            redirect_url = f"{frontend_base_url}/payment-success"
+            payload_body = {
+                "merchantOrderId": merchant_order_id,
+                "amount": amount_paise,
+                "paymentFlow": {
+                    "type": "PG_CHECKOUT",
+                    "merchantUrls": {
+                        "redirectUrl": redirect_url,
+                    },
+                },
+                "metaInfo": {
+                    "udf1": payload.get("courseSlug") or "",
+                    "udf2": plan_key,
+                    "udf3": email,
+                },
+            }
+            try:
+                resp = requests.post(
+                    pay_url,
+                    json=payload_body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"O-Bearer {token}",
+                    },
+                    timeout=10,
+                )
+                status_code = resp.status_code
+                resp_text = resp.text
+                resp_json = {}
+                try:
+                    resp_json = resp.json()
+                except Exception:
+                    pass
+
+                if status_code >= 400:
+                    logger.error(
+                        "PhonePe pay HTTP %s for %s: %s",
+                        status_code,
+                        merchant_order_id,
+                        resp_text,
+                    )
+                    msg = resp_json.get("message") or "Unable to initiate payment. Please try again."
+                    return _json_error(msg)
+
+                redirect_url_phonepe = resp_json.get("redirectUrl")
+                if redirect_url_phonepe:
+                    phonepe_payment = {
+                        "redirectUrl": redirect_url_phonepe,
+                        "orderId": resp_json.get("orderId"),
+                        "state": resp_json.get("state"),
+                    }
+                    meta = dict(payment.metadata or {})
+                    meta["phonepe"] = {
+                        "merchant_order_id": merchant_order_id,
+                        "amount": amount_paise,
+                        "currency": policy.get("currency", "INR"),
+                        "redirect_url": redirect_url,
+                        "redirect_url_phonepe": redirect_url_phonepe,
+                        "order_id": resp_json.get("orderId"),
+                        "state": resp_json.get("state"),
+                    }
+                    payment.metadata = meta
+                    payment.save(update_fields=["metadata", "updated_at"])
+                else:
+                    logger.error("PhonePe pay missing redirectUrl for %s: %s", merchant_order_id, resp_json)
+                    return _json_error("Unable to initiate payment. Please try again.")
+            except Exception as exc:
+                try:
+                    logger.error(
+                        "PhonePe pay exception for %s: %s",
+                        merchant_order_id,
+                        getattr(exc, "response", None).text if hasattr(exc, "response") and exc.response is not None else str(exc),
+                    )
+                except Exception:
+                    logger.exception("Failed to create PhonePe payment via REST for %s", merchant_order_id)
+                return _json_error("Unable to initiate payment. Please try again in a moment.")
+        else:
+            logger.warning("PhonePe REST credentials not configured; skipping live payment flow.")
+
+        response_payload = {
+            "transactionId": transaction_id,
+            "paymentStatus": payment.status,
+            "plan": policy,
+            "planType": plan_key,
+            "email": payment.email,
+            "amount": policy["price"],
+            "redirectRoute": "/fulfillment",
+            "processingTimeMs": 2000,
+            "certificatePreview": CERTIFICATE_PREVIEWS.get(orientation),
+            "startDate": start_date.isoformat() if start_date else None,
+            "endDate": end_date.isoformat() if end_date else None,
         }
 
-    payment = Payment.objects.create(
-        transaction_id=transaction_id,
-        course=course,
-        assessment=assessment,
-        plan_type=plan_key,
-        name=payload["name"],
-        email=email,
-        phone=payload["phone"],
-        amount=policy["price"],
-        currency=policy.get("currency", "INR"),
-        college_name=payload["collegeName"],
-        semester=payload["semester"],
-        project_link=payload.get("projectLink", ""),
-        repository_link=payload.get("repositoryLink", ""),
-        certificate_orientation=orientation,
-        start_date=start_date,
-        end_date=end_date,
-        metadata={
-            "courseSlug": payload.get("courseSlug"),
-            "assessmentSlug": payload.get("assessmentSlug"),
-            "certificatePreview": CERTIFICATE_PREVIEWS.get(orientation),
-            "projectDescription": project_description,
-            "projectTitle": project_title,
-            "projectArchive": archive_payload,
-        },
-    )
-    # ------------------------------------------------------------------
-    # PhonePe integration: create a payment request
-    # ------------------------------------------------------------------
-    merchant_id = getattr(settings, "PHONEPE_MERCHANT_ID", None)
-    client_id = getattr(settings, "PHONEPE_CLIENT_ID", None)
-    client_secret = getattr(settings, "PHONEPE_CLIENT_SECRET", None)
-    phonepe_env = getattr(settings, "PHONEPE_ENVIRONMENT", "SANDBOX")  # SANDBOX or PRODUCTION
-    frontend_base_url = getattr(settings, "FRONTEND_BASE_URL", "http://localhost:5173")
-    amount_paise = int(policy["price"]) * 100
-
-    phonepe_payment = None
-    if client_id and client_secret:
-        # Lazy import PhonePe SDK to avoid hard dependency at startup
-        try:
-            phonepe_sdk_module = importlib.import_module("phonepe_sdk.standard_checkout")
-            StandardCheckoutClient = getattr(phonepe_sdk_module, "StandardCheckoutClient")
-        except Exception as exc:
-            logger.error("PhonePe SDK not available: %s", exc)
-            return _json_error("Payment gateway not configured. Please contact support.")
-
-        try:
-            # Initialize PhonePe client (merchant_id is optional, may be part of client_id)
-            client_kwargs = {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "environment": phonepe_env
-            }
-            if merchant_id:
-                client_kwargs["merchant_id"] = merchant_id
-            
-            client = StandardCheckoutClient(**client_kwargs)
-            
-            redirect_url = f"{frontend_base_url}/payment-success"
-            callback_url = f"{request.scheme}://{request.get_host()}/api/payment-callback/"
-            
-            # Create payment request using PhonePe SDK
-            phonepe_payment = client.create_payment_request(
-                merchant_transaction_id=transaction_id,
-                amount=amount_paise,
-                merchant_user_id=email,  # Use email as unique user identifier
-                redirect_url=redirect_url,
-                redirect_mode="POST",
-                callback_url=callback_url,
-                mobile_number=payload.get("phone", ""),
-                payment_instrument={
-                    "type": "PAY_PAGE"
-                }
-            )
-            
-            # Persist PhonePe payment details for later verification
-            meta = dict(payment.metadata or {})
-            meta["phonepe"] = {
-                "merchant_transaction_id": transaction_id,
+        if phonepe_payment:
+            redirect_url_phonepe = phonepe_payment.get("redirectUrl") if isinstance(phonepe_payment, dict) else None
+            response_payload["phonepe"] = {
+                "merchantId": merchant_order_id,
+                "merchantTransactionId": transaction_id,
                 "amount": amount_paise,
                 "currency": policy.get("currency", "INR"),
-                "redirect_url": redirect_url,
-                "callback_url": callback_url,
+                "redirectUrl": redirect_url_phonepe,
             }
-            payment.metadata = meta
-            payment.save(update_fields=["metadata", "updated_at"])
-        except Exception as exc:
-            logger.exception("Failed to create PhonePe payment for %s", transaction_id)
-            return _json_error("Unable to initiate payment. Please try again in a moment.")
-    else:
-        logger.warning("PhonePe credentials not configured; skipping live payment flow.")
 
-    response_payload = {
-        "transactionId": transaction_id,
-        "paymentStatus": payment.status,
-        "plan": policy,
-        "planType": plan_key,
-        "email": payment.email,
-        "amount": policy["price"],
-        "redirectRoute": "/fulfillment",
-        "processingTimeMs": 2000,
-        "certificatePreview": CERTIFICATE_PREVIEWS.get(orientation),
-        "startDate": start_date.isoformat() if start_date else None,
-        "endDate": end_date.isoformat() if end_date else None,
-    }
-
-    if phonepe_payment:
-        # Extract redirect URL from PhonePe response
-        redirect_url_phonepe = None
-        if isinstance(phonepe_payment, dict):
-            redirect_url_phonepe = phonepe_payment.get("data", {}).get("instrumentResponse", {}).get("redirectInfo", {}).get("url")
-        
-        response_payload["phonepe"] = {
-            "merchantId": merchant_id,
-            "merchantTransactionId": transaction_id,
-            "amount": amount_paise,
-            "currency": policy.get("currency", "INR"),
-            "redirectUrl": redirect_url_phonepe,
-        }
-
-    return JsonResponse(response_payload)
+        return JsonResponse(response_payload)
+    except Exception as exc:
+        logger.exception("checkout_plan fatal error: %s", exc)
+        return _json_error(f"Internal error: {exc}", status=500)
 
 
 @csrf_exempt

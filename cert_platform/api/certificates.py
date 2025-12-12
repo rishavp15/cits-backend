@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
+from django.conf import settings
 import qrcode
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, A4
@@ -23,7 +24,8 @@ LIGHT_TEXT = colors.Color(0.35, 0.4, 0.47, alpha=0.5)
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+BASE_DIR = Path(getattr(settings, "BASE_DIR", Path(__file__).resolve().parent.parent))
+PROJECT_ROOT = BASE_DIR.parent
 FRONTEND_LOGO_DIR = PROJECT_ROOT / "frontend" / "src" / "logos"
 
 

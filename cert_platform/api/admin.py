@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django import forms
+from django.forms import Textarea
 
 from .models import (
     Assessment,
@@ -10,6 +12,7 @@ from .models import (
     Course,
     EmailOTP,
     Payment,
+    PlanConfig,
 )
 
 
@@ -18,11 +21,60 @@ class AssessmentQuestionInline(admin.TabularInline):
     extra = 1
 
 
+class CourseAdminForm(forms.ModelForm):
+    playlist_modules = forms.JSONField(
+        required=False,
+        help_text='''Format: Array of modules, each with:
+- title: Module title
+- description: Module description  
+- videos: Array of video objects with:
+  - url: YouTube URL
+  - title: Video title
+  - duration: Duration (e.g., "45m")
+Example: [{"title": "Python Basics", "description": "Learn Python", "videos": [{"url": "https://youtube.com/watch?v=...", "title": "Intro", "duration": "30m"}]}]''',
+        widget=Textarea(
+            attrs={
+                "rows": 25,
+                "style": "font-family: 'Courier New', monospace; font-size: 13px; width: 100%;",
+            }
+        ),
+    )
+
+    class Meta:
+        model = Course
+        fields = "__all__"
+        widgets = {
+            "gallery_images": Textarea(attrs={"rows": 5, "style": "font-family: monospace;"}),
+            "trust_grid": Textarea(attrs={"rows": 5, "style": "font-family: monospace;"}),
+        }
+
+
 @admin.register(Course)
 class CourseAdmin(admin.ModelAdmin):
+    form = CourseAdminForm
     list_display = ("title", "slug", "subject", "updated_at")
     search_fields = ("title", "slug", "subject")
     prepopulated_fields = {"slug": ("title",)}
+    fieldsets = (
+        ("Basic Information", {
+            "fields": ("title", "slug", "subject", "description"),
+        }),
+        ("SEO Settings", {
+            "fields": ("seo_title", "seo_description", "seo_keywords", "og_image_url"),
+            "classes": ("collapse",),
+        }),
+        ("Hero Section", {
+            "fields": ("hero_tagline", "hero_title", "hero_description", "hero_image_url", "card_image_url"),
+        }),
+        ("Media & Trust", {
+            "fields": ("gallery_images", "trust_grid"),
+            "classes": ("collapse",),
+        }),
+        ("Playlist Modules (Main Content)", {
+            "fields": ("playlist_modules",),
+            "description": "Add playlist modules with videos. Each module should have: title, description, and videos array with url, title, and duration.",
+        }),
+    )
 
 
 @admin.register(Assessment)
@@ -74,3 +126,20 @@ class EmailOTPAdmin(admin.ModelAdmin):
     list_display = ("email", "code", "created_at", "verified_at")
     search_fields = ("email",)
     list_filter = ("created_at",)
+
+
+@admin.register(PlanConfig)
+class PlanConfigAdmin(admin.ModelAdmin):
+    list_display = ("plan_type", "price", "original_price", "discount_display", "currency", "is_active", "updated_at")
+    list_filter = ("plan_type", "is_active")
+    search_fields = ("plan_type",)
+    fields = ("plan_type", "price", "original_price", "currency", "label_override", "is_active")
+    readonly_fields = ("discount_display",)
+    
+    def discount_display(self, obj):
+        """Display discount percentage"""
+        discount = obj.discount_percent
+        if discount > 0:
+            return f"{discount}% OFF"
+        return "No discount"
+    discount_display.short_description = "Discount"
