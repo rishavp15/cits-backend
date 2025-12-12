@@ -6,6 +6,7 @@ import base64
 import hashlib
 import os
 import time
+import threading
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -135,7 +136,7 @@ PLAN_RULES = {
         "currency": "INR",
         "requires_project": True,
         "description": "Industrial Training (3 Months)",
-        "duration_days": 60,
+        "duration_days": 90,
     },
     "mastery": {
         "label": "Mastery Certification",
@@ -144,7 +145,7 @@ PLAN_RULES = {
         "currency": "INR",
         "requires_project": True,
         "description": "Mastery Diploma (6 Months)",
-        "max_duration_days": 150,
+        "max_duration_days": 180,
     },
 }
 
@@ -248,6 +249,7 @@ def _serialize_course(course: Course):
         "certificateTypes": safe_json_field(course.certificate_types, []),
         "openStandardsLabel": str(course.open_standards_label) if course.open_standards_label else "",
         "playlistModules": safe_json_field(course.playlist_modules, []),
+        "projectTitleSuggestions": safe_json_field(getattr(course, "project_title_suggestions", None), []),
         "assessmentSlug": str(assessment_slug) if assessment_slug else None,
     }
 
@@ -342,6 +344,56 @@ def _issue_certificate(payment: Payment, note: str):
         detail={"note": note},
     )
     return certificate
+
+
+def _schedule_certificate_email(
+    *,
+    certificate: Certificate,
+    payment: Payment,
+    course_title: str,
+    plan_label: str,
+    verify_url: str,
+    download_url: str,
+    delay_seconds: int = 240,
+):
+    """
+    Send the certificate email after a short delay (default 4 minutes).
+    """
+
+    def _send():
+        email_body = (
+            f"Dear {payment.name},\n\n"
+            f"Congratulations! Your CITS Digital credential has been issued.\n\n"
+            f"Certificate ID: {certificate.certificate_id}\n"
+            f"Course: {course_title}\n"
+            f"Plan: {plan_label}\n\n"
+            f"You can verify your certificate at:\n{verify_url}\n\n"
+            f"You can download your certificate PDF from:\n{download_url}\n\n"
+            f"If you need any support help, call us at +91-9113750231.\n\n"
+            f"If you did not request this credential, please contact support immediately.\n\n"
+            f"Regards,\nCITS Digital Certification Desk"
+        )
+        try:
+            send_certificate_email(
+                recipient=payment.email,
+                subject="Your CITS Digital Certificate",
+                body=email_body,
+            )
+            CertificateDeliveryLog.objects.create(
+                certificate=certificate,
+                status="sent",
+                detail={"trigger": "auto-issue-delayed"},
+            )
+        except GmailSendError as exc:
+            CertificateDeliveryLog.objects.create(
+                certificate=certificate,
+                status="failed",
+                detail={"trigger": "auto-issue-delayed", "reason": str(exc)},
+            )
+
+    timer = threading.Timer(delay_seconds, _send)
+    timer.daemon = True
+    timer.start()
 
 
 def _ensure_certificate(payment: Payment, desired_id: Optional[str] = None):
@@ -1014,8 +1066,16 @@ def issue_certificate(request):
         course_title = payment.course.title if payment.course else "Certified Track"
 
         # Generate URLs for verification (QR) and certificate download
-        verify_url = f"{VERIFY_PAGE_URL}?certificateId={certificate.certificate_id}"
-        download_url = f"{FRONTEND_BASE_URL.rstrip('/')}/certificate/pdf?certificateId={certificate.certificate_id}"
+        verify_url_raw = f"{VERIFY_PAGE_URL}?certificateId={certificate.certificate_id}"
+        download_url_raw = f"{FRONTEND_BASE_URL.rstrip('/')}/certificate/pdf?certificateId={certificate.certificate_id}"
+
+        def _ensure_scheme(url: str) -> str:
+            if url.lower().startswith(("http://", "https://")):
+                return url
+            return f"https://{url.lstrip('/')}"
+
+        verify_url = _ensure_scheme(verify_url_raw)
+        download_url = _ensure_scheme(download_url_raw)
 
         # QR code should point to verification URL
         qr_payload = verify_url
@@ -1027,35 +1087,16 @@ def issue_certificate(request):
     plan_policy = _get_plan_policy(payment.plan_type)
     plan_label = plan_policy.get("label", payment.plan_type.title()) if plan_policy else payment.plan_type.title()
 
-    # Send certificate by email with verification link (no PDF attachment)
-    email_body = (
-        f"Dear {payment.name},\n\n"
-        f"Congratulations! Your CITS Digital credential has been issued.\n\n"
-        f"Certificate ID: {certificate.certificate_id}\n"
-        f"Course: {course_title}\n"
-        f"Plan: {plan_label}\n\n"
-        f"You can verify your certificate at:\n{verify_url}\n\n"
-        f"You can download your certificate PDF from:\n{download_url}\n\n"
-        f"If you did not request this credential, please contact support immediately.\n\n"
-        f"Regards,\nCITS Digital Certification Desk"
+    # Schedule certificate email after a short delay (4 minutes)
+    _schedule_certificate_email(
+        certificate=certificate,
+        payment=payment,
+        course_title=course_title,
+        plan_label=plan_label,
+        verify_url=verify_url,
+        download_url=download_url,
+        delay_seconds=240,
     )
-    try:
-        send_certificate_email(
-            recipient=payment.email,
-            subject="Your CITS Digital Certificate",
-            body=email_body,
-        )
-        CertificateDeliveryLog.objects.create(
-            certificate=certificate,
-            status="sent",
-            detail={"trigger": "auto-issue"},
-        )
-    except GmailSendError as exc:
-        CertificateDeliveryLog.objects.create(
-            certificate=certificate,
-            status="failed",
-            detail={"trigger": "auto-issue", "reason": str(exc)},
-        )
 
     return JsonResponse(
         {
@@ -1150,13 +1191,14 @@ def verify_certificate(request):
     time_period = None
     if certificate.plan_type in ["industrial", "mastery"]:
         if certificate.plan_type == "industrial":
-            time_period = "120 hours"
+            time_period = "3 months (120 hours)"
         elif certificate.plan_type == "mastery":
-            time_period = "240 hours"
+            time_period = "6 months (240 hours)"
     
     # Get course duration dates for industrial/master certificates
-    start_date = payment.start_date.isoformat() if payment and payment.start_date else None
-    end_date = payment.end_date.isoformat() if payment and payment.end_date else None
+    awarded_date = certificate.created_at.date()
+    end_date = awarded_date.isoformat()
+    start_date = (awarded_date - timedelta(days=90)).isoformat()
 
     return JsonResponse(
         {
@@ -1209,7 +1251,10 @@ def recover_certificate(request):
         send_certificate_email(
             recipient=email,
             subject="Your Fast-Track Certificate",
-            body=f"Dear learner,\n\nHere is the reference for certificate {certificate.certificate_id}.",
+            body=(
+                f"Dear learner,\n\nHere is the reference for certificate {certificate.certificate_id}.\n\n"
+                f"For changes or help, call us at +91-9113750231."
+            ),
         )
         CertificateDeliveryLog.objects.create(
             certificate=certificate,
@@ -1488,7 +1533,10 @@ def admin_send_certificate(request, certificate_id):
         send_certificate_email(
             recipient=recipient,
             subject=f"Certificate {certificate.certificate_id}",
-            body=f"Hi,\n\nPlease find the confirmation for certificate {certificate.certificate_id} ({certificate.plan_type}).",
+            body=(
+                f"Hi,\n\nPlease find the confirmation for certificate {certificate.certificate_id} ({certificate.plan_type}).\n\n"
+                f"If you need any changes or help, call us at +91-9113750231."
+            ),
         )
         CertificateDeliveryLog.objects.create(
             certificate=certificate,

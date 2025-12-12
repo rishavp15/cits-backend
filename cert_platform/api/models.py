@@ -40,6 +40,7 @@ class Course(TimeStampedModel):
     certificate_types = models.JSONField(default=list, blank=True)
     open_standards_label = models.CharField(max_length=200, blank=True)
     playlist_modules = models.JSONField(default=list, blank=True)
+    project_title_suggestions = models.JSONField(default=list, blank=True)
 
     def __str__(self):
         return self.title
