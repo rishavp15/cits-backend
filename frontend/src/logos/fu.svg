@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <!-- Gear Icon -->
+  <circle cx="100" cy="100" r="60" fill="#1e3a8a" stroke="#b45309" stroke-width="3"/>
+  <path d="M100 50 L105 60 L115 55 L110 70 L125 75 L115 85 L130 95 L115 105 L125 115 L110 130 L115 140 L105 145 L100 150 L95 145 L85 140 L90 130 L75 115 L85 105 L70 95 L85 85 L75 75 L90 70 L85 55 L95 60 Z" fill="#b45309"/>
+  <!-- ISCB Text -->
+  <text x="100" y="140" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#1e3a8a" text-anchor="middle">ISCB</text>
+</svg>

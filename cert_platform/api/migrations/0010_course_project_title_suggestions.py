@@ -30,3 +30,4 @@ class Migration(migrations.Migration):
         migrations.RunPython(seed_project_title_suggestions, migrations.RunPython.noop),
     ]
 
+

@@ -218,6 +218,33 @@ def _serialize_course(course: Course):
         except (json.JSONDecodeError, TypeError, ValueError):
             return default
     
+    # Serialize testimonials from Testimonial model (with SEO fields)
+    # Fall back to JSONField if no testimonials exist in the model (backward compatibility)
+    testimonials_data = []
+    try:
+        from .models import Testimonial
+        testimonial_entries = Testimonial.objects.filter(course=course, is_active=True).order_by("order", "created_at")
+        if testimonial_entries.exists():
+            for testimonial in testimonial_entries:
+                testimonials_data.append({
+                    "id": str(testimonial.id),
+                    "name": str(testimonial.name) if testimonial.name else "",
+                    "role": str(testimonial.role) if testimonial.role else "",
+                    "quote": str(testimonial.quote) if testimonial.quote else "",
+                    "image": str(testimonial.image) if testimonial.image else "",
+                    # SEO fields
+                    "seoTitle": str(testimonial.seo_title) if testimonial.seo_title else "",
+                    "seoDescription": str(testimonial.seo_description) if testimonial.seo_description else "",
+                    "seoKeywords": str(testimonial.seo_keywords) if testimonial.seo_keywords else "",
+                    "ogImageUrl": str(testimonial.og_image_url) if testimonial.og_image_url else "",
+                })
+        else:
+            # Fall back to JSONField for backward compatibility
+            testimonials_data = safe_json_field(course.testimonials, [])
+    except Exception:
+        # If Testimonial model doesn't exist or query fails, fall back to JSONField
+        testimonials_data = safe_json_field(course.testimonials, [])
+    
     return {
         "slug": str(course.slug) if course.slug else "",
         "title": str(course.title) if course.title else "",
@@ -235,7 +262,7 @@ def _serialize_course(course: Course):
         "galleryImages": safe_json_field(course.gallery_images, []),
         "trustGrid": safe_json_field(course.trust_grid, []),
         "certifications": safe_json_field(course.certifications, []),
-        "testimonials": safe_json_field(course.testimonials, []),
+        "testimonials": testimonials_data,
         "subject": str(course.subject) if course.subject else "",
         "icon": str(course.icon) if course.icon else "",
         "color": str(course.color) if course.color else "",

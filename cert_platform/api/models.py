@@ -26,7 +26,7 @@ class Course(TimeStampedModel):
     gallery_images = models.JSONField(default=list, blank=True)
     trust_grid = models.JSONField(default=list, blank=True)
     certifications = models.JSONField(default=list, blank=True)
-    testimonials = models.JSONField(default=list, blank=True)
+    testimonials = models.JSONField(default=list, blank=True)  # Deprecated - use Testimonial model instead
     subject = models.CharField(max_length=150, blank=True)
     icon = models.CharField(max_length=40, blank=True)
     color = models.CharField(max_length=40, blank=True)
@@ -44,6 +44,30 @@ class Course(TimeStampedModel):
 
     def __str__(self):
         return self.title
+
+
+class Testimonial(TimeStampedModel):
+    """Testimonial model with SEO fields for better search engine visibility"""
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="testimonial_entries")
+    name = models.CharField(max_length=120)
+    role = models.CharField(max_length=150, blank=True)
+    quote = models.TextField()
+    image = models.URLField(blank=True, help_text="URL to the testimonial author's image/avatar")
+    # SEO fields for this testimonial
+    seo_title = models.CharField(max_length=180, blank=True, help_text="SEO title for this testimonial (e.g., 'Student Review: [Name] - [Course]')")
+    seo_description = models.CharField(max_length=320, blank=True, help_text="SEO description/meta description for this testimonial")
+    seo_keywords = models.CharField(max_length=320, blank=True, help_text="Comma-separated keywords for SEO")
+    og_image_url = models.URLField(blank=True, help_text="Open Graph image URL for social media sharing")
+    order = models.PositiveIntegerField(default=0, help_text="Display order (lower numbers appear first)")
+    is_active = models.BooleanField(default=True, help_text="Show this testimonial on the course page")
+
+    class Meta:
+        ordering = ["order", "created_at"]
+        verbose_name = "Testimonial"
+        verbose_name_plural = "Testimonials"
+
+    def __str__(self):
+        return f"{self.name} - {self.course.title if self.course else 'No Course'}"
 
 
 class Assessment(TimeStampedModel):
@@ -194,35 +218,6 @@ class CertificateDeliveryLog(TimeStampedModel):
 
     def __str__(self):
         return f"{self.certificate.certificate_id} via {self.channel}"
-
-
-class ContactMessage(TimeStampedModel):
-    name = models.CharField(max_length=120)
-    email = models.EmailField()
-    phone = models.CharField(max_length=20, blank=True)
-    subject = models.CharField(max_length=200)
-    message = models.TextField()
-
-    class Meta:
-        ordering = ["-created_at"]
-
-    def __str__(self):
-        return f"{self.name} - {self.subject}"
-
-
-class EmailOTP(TimeStampedModel):
-    email = models.EmailField()
-    code = models.CharField(max_length=10)
-    verified_at = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=["email", "created_at"]),
-        ]
-        ordering = ["-created_at"]
-
-    def __str__(self):
-        return f"OTP for {self.email}"
 
 
 class ContactMessage(TimeStampedModel):

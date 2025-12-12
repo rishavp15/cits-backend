@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Outer gold circle -->
+  <circle cx="100" cy="100" r="95" fill="#b45309" stroke="#d97706" stroke-width="4"/>
+  <!-- Inner decorative ring -->
+  <circle cx="100" cy="100" r="75" fill="none" stroke="#f9c74f" stroke-width="2" stroke-dasharray="5,5"/>
+  <!-- Center seal design -->
+  <circle cx="100" cy="100" r="50" fill="#f9c74f" stroke="#d97706" stroke-width="3"/>
+  <!-- Star/Seal pattern -->
+  <path d="M100 60 L105 75 L120 75 L110 85 L115 100 L100 90 L85 100 L90 85 L80 75 L95 75 Z" fill="#b45309"/>
+  <!-- Text -->
+  <text x="100" y="130" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#1e3a8a" text-anchor="middle">SEAL</text>
+</svg>

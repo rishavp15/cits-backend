@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <!-- Stylized S with leaf/flame -->
+  <path d="M100 30 Q120 30 130 50 Q140 70 120 90 Q100 110 80 130 Q60 150 70 170 Q80 190 100 190" stroke="#1e3a8a" stroke-width="12" fill="none" stroke-linecap="round"/>
+  <!-- Leaf/Flame motif -->
+  <path d="M140 60 Q150 50 160 60 Q150 70 140 60" fill="#b45309"/>
+  <path d="M60 140 Q50 130 40 140 Q50 150 60 140" fill="#b45309"/>
+</svg>
